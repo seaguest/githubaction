@@ -235,3 +235,222 @@ func (c *cache) getObject(key string, obj interface{}, ttl time.Duration, f func
 	it = itf.(*Item)
 	return
 }
+
+// resetObject load fresh data to redis and in-memory with loader function
+func (c *cache) resetObject(namespacedKey string, ttl time.Duration, f func() (interface{}, error)) (*Item, error) {
+	itf, err, _ := c.sfg.Do(namespacedKey+"_reset", func() (it interface{}, err error) {
+		// add metric for a fresh load
+		defer c.metric.Observe()(namespacedKey, MetricTypeLoad, &err)
+
+		defer func() {
+			if r := recover(); r != nil {
+				switch v := r.(type) {
+				case error:
+					err = errors.WithStack(v)
+				default:
+					err = errors.New(fmt.Sprint(r))
+				}
+				c.options.OnError(err)
+			}
+		}()
+
+		var o interface{}
+		o, err = f()
+		if err != nil {
+			return
+		}
+
+		it, err = c.rds.set(namespacedKey, o, ttl)
+		if err != nil {
+			return
+		}
+
+		// notifyAll
+		c.notifyAll(&actionRequest{
+			Action:   cacheSet,
+			TypeName: getTypeName(o),
+			Key:      namespacedKey,
+			Object:   o,
+		})
+		return
+	})
+	if err != nil {
+		return nil, err
+	}
+	return itf.(*Item), nil
+}
+
+func (c *cache) DeleteFromMem(key string) {
+	namespacedKey := c.namespacedKey(key)
+	c.mem.delete(namespacedKey)
+}
+
+func (c *cache) DeleteFromRedis(key string) error {
+	namespacedKey := c.namespacedKey(key)
+	return c.rds.delete(namespacedKey)
+}
+
+// Delete notify all cache instances to delete cache key
+func (c *cache) Delete(key string) (err error) {
+	namespacedKey := c.namespacedKey(key)
+	defer c.metric.Observe()(namespacedKey, MetricTypeDeleteCache, &err)
+
+	// delete redis, then pub to delete cache
+	if err = c.rds.delete(namespacedKey); err != nil {
+		err = errors.WithStack(err)
+		return
+	}
+
+	c.notifyAll(&actionRequest{
+		Action: cacheDelete,
+		Key:    namespacedKey,
+	})
+	return
+}
+
+// checkType register type if not exists.
+func (c *cache) checkType(typeName string, obj interface{}, ttl time.Duration) {
+	_, ok := c.types.Load(typeName)
+	if !ok {
+		c.types.Store(typeName, &objectType{typ: deepcopy.Copy(obj), ttl: ttl})
+	}
+}
+
+// copy object to return, to avoid dirty data
+func (c *cache) copy(src, dst interface{}) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			switch v := r.(type) {
+			case error:
+				err = errors.WithStack(v)
+			default:
+				err = errors.New(fmt.Sprint(r))
+			}
+			c.options.OnError(err)
+		}
+	}()
+
+	v := deepcopy.Copy(src)
+	if reflect.ValueOf(v).IsValid() {
+		reflect.ValueOf(dst).Elem().Set(reflect.Indirect(reflect.ValueOf(v)))
+	}
+	return
+}
+
+// get the global unique id for a given object type.
+func getTypeName(obj interface{}) string {
+	return reflect.TypeOf(obj).Elem().PkgPath() + "/" + reflect.TypeOf(obj).String()
+}
+
+func (c *cache) namespacedKey(key string) string {
+	return c.options.Namespace + ":" + key
+}
+
+type cacheAction int
+
+const (
+	cacheSet cacheAction = iota // cacheSet == 0
+	cacheDelete
+)
+
+// stores the object type and its ttl in memory
+type objectType struct {
+	// object type
+	typ interface{}
+
+	// object ttl
+	ttl time.Duration
+}
+
+// actionRequest defines an entity which will be broadcast to all cache instances
+type actionRequest struct {
+	// cacheSet or cacheDelete
+	Action cacheAction `json:"action"`
+
+	// the type_name of the target object
+	TypeName string `json:"type_name"`
+
+	// key of the cache item
+	Key string `json:"key"`
+
+	// object stored in the cache, only used by caller, won't be broadcast
+	Object interface{} `json:"-"`
+
+	// the marshaled string of object
+	Payload []byte `json:"payload"`
+}
+
+func (c *cache) actionChannel() string {
+	return c.options.Namespace + ":action_channel"
+}
+
+// watch the cache update
+func (c *cache) watch() {
+	conn := c.options.GetConn()
+	defer conn.Close()
+
+	psc := redis.PubSubConn{Conn: conn}
+	if err := psc.Subscribe(c.actionChannel()); err != nil {
+		c.options.OnError(errors.WithStack(err))
+		return
+	}
+
+	for {
+		switch v := psc.Receive().(type) {
+		case redis.Message:
+			var ar actionRequest
+			if err := json.Unmarshal(v.Data, &ar); err != nil {
+				c.options.OnError(errors.WithStack(err))
+				continue
+			}
+
+			switch ar.Action {
+			case cacheSet:
+				objType, ok := c.types.Load(ar.TypeName)
+				if !ok {
+					continue
+				}
+
+				obj := deepcopy.Copy(objType.(*objectType).typ)
+				if err := json.Unmarshal(ar.Payload, obj); err != nil {
+					c.options.OnError(errors.WithStack(err))
+					continue
+				}
+
+				it := newItem(obj, objType.(*objectType).ttl)
+				it.Size = len(ar.Payload)
+				c.mem.set(ar.Key, it)
+			case cacheDelete:
+				c.mem.delete(ar.Key)
+			}
+		case error:
+			c.options.OnError(errors.WithStack(v))
+			time.Sleep(time.Second) // Wait for a second before attempting to receive messages again
+		}
+	}
+}
+
+// notifyAll will broadcast the cache change to all cache instances
+func (c *cache) notifyAll(ar *actionRequest) {
+	bs, err := json.Marshal(ar.Object)
+	if err != nil {
+		c.options.OnError(errors.WithStack(err))
+		return
+	}
+	ar.Payload = bs
+
+	msgBody, err := json.Marshal(ar)
+	if err != nil {
+		c.options.OnError(errors.WithStack(err))
+		return
+	}
+
+	conn := c.options.GetConn()
+	defer conn.Close()
+
+	_, err = conn.Do("PUBLISH", c.actionChannel(), string(msgBody))
+	if err != nil {
+		c.options.OnError(errors.WithStack(err))
+		return
+	}
+}
