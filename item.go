@@ -23,3 +23,5 @@ func newItem(v interface{}, ttl time.Duration) *Item {
 func (it *Item) Expired() bool {
 	return it.ExpireAt != 0 && it.ExpireAt < time.Now().UnixMilli()
 }
+
++first
