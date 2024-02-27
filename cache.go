@@ -18,7 +18,7 @@ var (
 )
 
 const (
-	defaultNamespace = "default"
+	defaultNamespace = "def4444ault"
 )
 
 type Cache interface {
