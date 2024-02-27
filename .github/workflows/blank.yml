@@ -2,34 +2,22 @@ name: Test
 
 on:
   pull_request:
-    types:
-      - opened
-      - reopened
-      - synchronize
-      - ready_for_review
+    types: [opened, reopened, synchronize, ready_for_review]
+  push:
+    branches:
+      - main
 
 jobs:
-  pr-status:
-    runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
-    outputs:
-      is_draft: ${{ steps.check.outputs.is_draft }}
-    steps:
-      - id: check
-        run: echo "is_draft=${{ github.event.pull_request.draft }}" >> "$GITHUB_OUTPUT"
-
   Test:
-    needs: pr-status
-    if: needs.pr-status.outputs.is_draft == 'false'
     runs-on: ubuntu-latest
-
+    # This condition ensures tests are skipped for draft PRs but run in all other scenarios you've described.
+    if: >
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.draft == false
     steps:
-    - name: Check out code
-      uses: actions/checkout@v4
-      with:
-        path: main
+      - name: Check out code
+        uses: actions/checkout@v4
 
-    - name: Run tests
-      run: |
-        set -eo pipefail
-        echo "run test.."
+      - name: Run tests
+        run: |
+          echo "Running tests..."
