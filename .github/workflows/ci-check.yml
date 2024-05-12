@@ -20,6 +20,8 @@ jobs:
           --header 'Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}' \
           --header 'Accept: application/vnd.github.v3+json')
 
+        echo $CHECKS
+
         FAILED_CHECKS=$(echo $CHECKS | jq '.check_runs[] | select(.status != "completed" or .conclusion != "success")')
 
         if [ "$FAILED_CHECKS" != "" ]; then
