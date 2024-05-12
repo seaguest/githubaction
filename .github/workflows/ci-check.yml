@@ -1,10 +1,9 @@
 name: CI Check
 
 on:
-  workflow_run:
-    workflows: ["Test", "Fake CI Check"]  # Replace with the names of your other workflows
+  pull_request:
     types:
-      - completed
+      - closed
 
 jobs:
   check_ci_status:
@@ -20,6 +19,8 @@ jobs:
           --url https://api.github.com/repos/${{ github.repository }}/pulls/$PR_NUMBER/check-runs \
           --header 'Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}' \
           --header 'Accept: application/vnd.github.v3+json')
+
+        echo $CHECKS
 
         FAILED_CHECKS=$(echo $CHECKS | jq '.check_runs[] | select(.status != "completed" or .conclusion != "success")')
 
