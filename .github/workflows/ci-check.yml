@@ -1,9 +1,8 @@
 name: Check CI Status
 on:
-  workflow_run:
-    workflows: ["Test", "Fake CI Check"]
-    types:
-      - completed
+  push:
+    branches:
+      - main
 
 jobs:
   check-status:
@@ -18,10 +17,31 @@ jobs:
           echo "SHA of latest commit on main branch: $SHA"
           echo "::set-output name=sha::$SHA"
 
-      - name: Get check-runs for the latest commit
+      - name: Wait for other workflows to complete and check CI status
         run: |
-          CHECK_RUNS=$(curl --location --request GET "https://api.github.com/repos/seaguest/githubaction/commits/${{ steps.get-sha.outputs.sha }}/check-runs" \
-          --header 'Authorization: Bearer ${{ secrets.GH_TOKEN }}' \
-          --header 'Accept: application/vnd.github.v3+json' | jq '.check_runs[] | {name: .name, conclusion: .conclusion}')
-          echo "Check runs for latest commit:"
-          echo "$CHECK_RUNS"
+          while : ; do
+            WORKFLOWS=$(curl --location --request GET "https://api.github.com/repos/seaguest/githubaction/actions/runs" \
+            --header 'Authorization: Bearer ${{ secrets.GH_TOKEN }}' \
+            --header 'Accept: application/vnd.github.v3+json' | jq '.workflow_runs[] | select(.head_branch=="main" and .head_sha=="${{ steps.get-sha.outputs.sha }}" and (.name=="Test" or .name=="Fake CI Check")) | .conclusion')
+            
+            # Check if all required workflows have completed
+            if echo "$WORKFLOWS" | jq -e 'all(. != null)' > /dev/null ; then
+              CHECK_RUNS=$(curl --location --request GET "https://api.github.com/repos/seaguest/githubaction/commits/${{ steps.get-sha.outputs.sha }}/check-runs" \
+              --header 'Authorization: Bearer ${{ secrets.GH_TOKEN }}' \
+              --header 'Accept: application/vnd.github.v3+json' | jq '.check_runs[] | {name: .name, conclusion: .conclusion, status: .status}')
+              
+              echo "Check runs for latest commit:"
+              echo "$CHECK_RUNS"
+              
+              if echo "$CHECK_RUNS" | jq -e 'all(.conclusion == "success")' > /dev/null ; then
+                echo "All CI checks have succeeded"
+              else
+                echo "Some CI checks have failed"
+              fi
+              
+              break
+            fi
+            
+            echo "Waiting for other workflows to complete..."
+            sleep 60
+          done
