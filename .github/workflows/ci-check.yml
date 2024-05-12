@@ -19,15 +19,13 @@ jobs:
 
       - name: Wait for other workflows to complete and check CI status
         run: |
+          COUNTER=0
           while : ; do
             API_RESPONSE=$(curl --location --request GET "https://api.github.com/repos/seaguest/githubaction/commits/${{ steps.get-sha.outputs.sha }}/check-runs" \
             --header 'Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}' \
             --header 'Accept: application/vnd.github.v3+json')
             
-            echo "API response:"
-            echo "$API_RESPONSE"
-            
-            CHECK_RUNS=$(echo "$API_RESPONSE" | jq '.check_runs[] | select(.name != "check-status") | {name: .name, conclusion: .conclusion, status: .status}')
+            CHECK_RUNS=$(echo "$API_RESPONSE" | jq '[.check_runs[] | select(.name != "check-status") | {name: .name, conclusion: .conclusion, status: .status}]')
             
             echo "Check runs for latest commit:"
             echo "$CHECK_RUNS"
@@ -39,8 +37,15 @@ jobs:
                 break
               else
                 echo "Some CI checks have failed or are neutral"
-                break
+                exit 1
               fi
+            fi
+            
+            # Increment the counter and check if it's reached the timeout
+            let COUNTER=COUNTER+1
+            if [ $COUNTER -ge 90 ]; then
+              echo "Timeout waiting for workflows to complete"
+              exit 1
             fi
             
             echo "Waiting for other workflows to complete..."
