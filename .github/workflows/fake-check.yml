@@ -1,0 +1,13 @@
+name: Fake CI Check
+
+on:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  fake_check:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Always fail
+      run: exit 1
