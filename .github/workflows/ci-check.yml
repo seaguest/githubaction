@@ -11,10 +11,13 @@ jobs:
       - name: Get latest commit SHA on main branch
         id: get-sha
         run: |
-          SHA=$(curl --location --request GET 'https://api.github.com/repos/seaguest/githubaction/commits/main' \
+          RESPONSE=$(curl --location --request GET 'https://api.github.com/repos/seaguest/githubaction/commits/main' \
           --header 'Authorization: Bearer ${{ secrets.GH_TOKEN }}' \
-          --header 'Accept: application/vnd.github.v3+json' | jq -r '.sha')
+          --header 'Accept: application/vnd.github.v3+json')
+          echo "API response: $RESPONSE"
+          SHA=$(echo "$RESPONSE" | jq -r '.sha')
           echo "SHA of latest commit on main branch: $SHA"
+
           echo "::set-output name=sha::$SHA"
 
       - name: Wait for other workflows to complete and check CI status
