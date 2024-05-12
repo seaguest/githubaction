@@ -1,0 +1,29 @@
+name: CI Check
+
+on:
+  pull_request:
+    types:
+      - closed
+
+jobs:
+  check_merged_pr:
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'main'
+    steps:
+    - name: Check merged PR CI status
+      run: |
+        PR_NUMBER=${{ github.event.pull_request.number }}
+        PR_OWNER=${{ github.event.pull_request.user.login }}
+
+        CHECKS=$(curl --silent --request GET \
+          --url https://api.github.com/repos/${{ github.repository }}/pulls/$PR_NUMBER/check-runs \
+          --header 'Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}' \
+          --header 'Accept: application/vnd.github.v3+json')
+
+        FAILED_CHECKS=$(echo $CHECKS | jq '.check_runs[] | select(.status != "completed" or .conclusion != "success")')
+
+        if [ "$FAILED_CHECKS" != "" ]; then
+          echo "Merged PR CI checks not all succeeded, alerting the PR owner"
+        else
+          echo "All CI checks for PR #$PR_NUMBER by $PR_OWNER have passed."
+        fi
