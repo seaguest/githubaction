@@ -1,31 +1,27 @@
-name: CI Check
-
+name: Check CI Status
 on:
-  pull_request:
+  workflow_run:
+    workflows: ["Test", "Fake CI Check"]
     types:
-      - closed
+      - completed
 
 jobs:
-  check_ci_status:
+  check-status:
     runs-on: ubuntu-latest
-    if: github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'main'
     steps:
-    - name: Check merged PR CI status
-      run: |
-        PR_NUMBER=${{ github.event.pull_request.number }}
-        PR_OWNER=${{ github.event.pull_request.user.login }}
+      - name: Get latest commit SHA on main branch
+        id: get-sha
+        run: |
+          SHA=$(curl --location --request GET 'https://api.github.com/repos/seaguest/githubaction/commits/main' \
+          --header 'Authorization: Bearer ${{ secrets.GH_TOKEN }}' \
+          --header 'Accept: application/vnd.github.v3+json' | jq -r '.sha')
+          echo "SHA of latest commit on main branch: $SHA"
+          echo "::set-output name=sha::$SHA"
 
-        CHECKS=$(curl --silent --request GET \
-          --url https://api.github.com/repos/${{ github.repository }}/pulls/$PR_NUMBER/check-runs \
-          --header 'Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}' \
-          --header 'Accept: application/vnd.github.v3+json')
-
-        echo $CHECKS
-
-        FAILED_CHECKS=$(echo $CHECKS | jq '.check_runs[] | select(.status != "completed" or .conclusion != "success")')
-
-        if [ "$FAILED_CHECKS" != "" ]; then
-          echo "Merged PR CI checks not all succeeded, alerting the PR owner"
-        else
-          echo "All CI checks for PR #$PR_NUMBER by $PR_OWNER have passed."
-        fi
+      - name: Get check-runs for the latest commit
+        run: |
+          CHECK_RUNS=$(curl --location --request GET "https://api.github.com/repos/seaguest/githubaction/commits/${{ steps.get-sha.outputs.sha }}/check-runs" \
+          --header 'Authorization: Bearer ${{ secrets.GH_TOKEN }}' \
+          --header 'Accept: application/vnd.github.v3+json' | jq '.check_runs[] | {name: .name, conclusion: .conclusion}')
+          echo "Check runs for latest commit:"
+          echo "$CHECK_RUNS"
