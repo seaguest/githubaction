@@ -1,10 +1,9 @@
 name: CI Check
 
 on:
-  workflow_run:
-    workflows: ["Test", "Fake CI Check"]  # Replace with the names of your other workflows
+  pull_request:
     types:
-      - completed
+      - closed
 
 jobs:
   check_ci_status:
