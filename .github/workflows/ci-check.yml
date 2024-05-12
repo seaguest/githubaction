@@ -22,8 +22,8 @@ jobs:
           while : ; do
             CHECK_RUNS=$(curl --location --request GET "https://api.github.com/repos/seaguest/githubaction/commits/${{ steps.get-sha.outputs.sha }}/check-runs" \
             --header 'Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}' \
-            --header 'Accept: application/vnd.github.v3+json' | jq '.check_runs[] | {name: .name, conclusion: .conclusion, status: .status}')
-            
+            --header 'Accept: application/vnd.github.v3+json' | jq '.check_runs[] | select(.name != "check-status") | {name: .name, conclusion: .conclusion, status: .status}')
+                        
             echo "Check runs for latest commit:"
             echo "$CHECK_RUNS"
             
