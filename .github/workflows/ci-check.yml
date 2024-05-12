@@ -1,9 +1,8 @@
 name: Check CI Status
 on:
-  workflow_run:
-    workflows: ["Test", "Fake CI Check"]
-    types:
-      - completed
+  push:
+    branches:
+      - main
 
 jobs:
   check-status:
@@ -12,19 +11,33 @@ jobs:
       - name: Get latest commit SHA on main branch
         id: get-sha
         run: |
-          RESPONSE=$(curl --location --request GET 'https://api.github.com/repos/seaguest/githubaction/commits/main' \
-          --header 'Authorization: Bearer ${{ secrets.GH_TOKEN }}' \
-          --header 'Accept: application/vnd.github.v3+json')
-          echo "API response: $RESPONSE"
-          SHA=$(echo "$RESPONSE" | jq -r '.sha')
+          SHA=$(curl --location --request GET 'https://api.github.com/repos/seaguest/githubaction/commits/main' \
+          --header 'Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}' \
+          --header 'Accept: application/vnd.github.v3+json' | jq -r '.sha')
           echo "SHA of latest commit on main branch: $SHA"
-
           echo "::set-output name=sha::$SHA"
 
-      - name: Get check-runs for the latest commit
+      - name: Wait for other workflows to complete and check CI status
         run: |
-          CHECK_RUNS=$(curl --location --request GET "https://api.github.com/repos/seaguest/githubaction/commits/${{ steps.get-sha.outputs.sha }}/check-runs" \
-          --header 'Authorization: Bearer ${{ secrets.GH_TOKEN }}' \
-          --header 'Accept: application/vnd.github.v3+json' | jq '.check_runs[] | {name: .name, conclusion: .conclusion}')
-          echo "Check runs for latest commit:"
-          echo "$CHECK_RUNS"
+          while : ; do
+            CHECK_RUNS=$(curl --location --request GET "https://api.github.com/repos/seaguest/githubaction/commits/${{ steps.get-sha.outputs.sha }}/check-runs" \
+            --header 'Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}' \
+            --header 'Accept: application/vnd.github.v3+json' | jq '.check_runs[] | {name: .name, conclusion: .conclusion, status: .status}')
+            
+            echo "Check runs for latest commit:"
+            echo "$CHECK_RUNS"
+            
+            # Check if all required workflows have completed
+            if echo "$CHECK_RUNS" | jq -e 'all(.status == "completed")' > /dev/null ; then
+              if echo "$CHECK_RUNS" | jq -e 'all(.conclusion == "success")' > /dev/null ; then
+                echo "All CI checks have succeeded"
+                break
+              else
+                echo "Some CI checks have failed or are neutral"
+                break
+              fi
+            fi
+            
+            echo "Waiting for other workflows to complete..."
+            sleep 10
+          done
